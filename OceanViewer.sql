@@ -1,66 +1,97 @@
-﻿----------------------
--- Печать сообщения --
-----------------------
-CREATE OR REPLACE FUNCTION admin.ov_print(text) RETURNS text AS $$
-  return $_[0];
-$$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_print(text) IS 'Печать сообщения';
+﻿------------------------------------------------
+-- Выполнение SQL запроса из командной строки --
+------------------------------------------------
+CREATE OR REPLACE FUNCTION admin.ov_psql(text) RETURNS text AS $$
+  my $sql = $_[0];
 
-------------------------
--- Вызов команды curl --
-------------------------
-CREATE OR REPLACE FUNCTION admin.ov_curl(text) RETURNS text AS $$
-  $stdout = `curl --location-trusted -s -o /dev/null -w "%{http_code}" $_[0]`;
+  # Инициализация глобальных переменных PLPerl
+  if ($_SHARED{'version'} eq '') {
+    spi_exec_query('SELECT admin.ov_initPLPerl()');
+  }
+
+  # Выполнение psql на сервере БД
+  my $stdout = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "$sql" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
+
+  # Удаление лишних символов из вывода
+  $stdout =~ s/[\r\n]+//g;
+  substr $stdout, 0, 1, '';
+  
   return $stdout;
 $$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_curl(text) IS 'Вызов команды curl';
+COMMENT ON FUNCTION admin.ov_psql(text) IS 'Выполнение SQL запроса из командной строки';
 
---------------------------------------
--- Вызов команды curl с параметрами --
---------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_curl(text, text) RETURNS text AS $$
-  $stdout = `curl --location-trusted -s -o /dev/null -w "%{http_code}" $_[1] $_[0]`;
+-----------------------------------------------------------------
+-- Выполнение SQL запроса из командной строки в фоновом режиме --
+-----------------------------------------------------------------
+CREATE OR REPLACE FUNCTION admin.ov_psqlb(text) RETURNS text AS $$
+  my $sql = $_[0];
+
+  # Инициализация глобальных переменных PLPerl
+  if ($_SHARED{'version'} eq '') {
+    spi_exec_query('SELECT admin.ov_initPLPerl()');
+  }
+
+  # Выполнение psql на сервере БД
+  my $stdout = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "$sql" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'} &`;
+
+  # Удаление лишних символов из вывода
+  $stdout =~ s/[\r\n]+//g;
+  substr $stdout, 0, 1, '';
+  
   return $stdout;
 $$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_curl(text, text) IS 'Вызов команды curl с параметрами';
+COMMENT ON FUNCTION admin.ov_psqlb(text) IS 'Выполнение SQL запроса из командной строки в фоновом режиме';
 
------------------------
--- Вызов команды ssh --
------------------------
+---------------------------------------------
+-- Выполнение команды на удаленном сервере --
+---------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_ssh(text) RETURNS text AS $$
-  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'grasshost'");
-  $grasshost = $rv->{rows}[0]->{value};
-  $_[0] =~ s/"/\\"/g;
-  $stdout = `ssh tomcat\@$grasshost "$_[0]"`;
-  return $stdout;
-$$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_ssh(text) IS 'Вызов команды ssh';
+  my $cmd = $_[0];
 
+  # Получаем адрес удаленного сервера
+  my $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'grasshost'");
+  my $grasshost = $rv->{rows}[0]->{value};
 
---------------------------------------------------------
--- Вызов команды ssh с инициализацией окружения GRASS --
---------------------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_ssh(text, text) RETURNS text AS $$
-  $resourceid = $_[0];
-  $cmd        = $_[1];
-
-  $resourceid =~ s/-/_/;
-  $resourceid = lc($resourceid);
+  # Сохранение двойных кавычек в тексте команды
   $cmd =~ s/"/\\"/g;
 
-  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'grasshome'");
-  $grasshome = $rv->{rows}[0]->{value};
-  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'ovhome'");
-  $ovhome = $rv->{rows}[0]->{value};
-  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'grasshost'");
-  $grasshost = $rv->{rows}[0]->{value};
+  # Выполнение команды на удаленном сервере
+  my $stdout = `ssh tomcat\@$grasshost "$cmd"`;
+  
+  return $stdout;
+$$ LANGUAGE plperlu;
+COMMENT ON FUNCTION admin.ov_ssh(text) IS 'Выполнение команды на удаленном сервере';
 
+------------------------------------------------------------------------------
+-- Выполнение команды на удаленном сервере с инициализацией GRASS окружения --
+------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION admin.ov_ssh(text, text) RETURNS text AS $$
+  my $resourceid = $_[0];
+  my $cmd        = $_[1];
+
+  # Конвертация строки в нижний регистр и замена символа "-" на "_"
+  $resourceid =~ s/-/_/;
+  $resourceid = lc($resourceid);
+
+  # Сохранение двойных кавычек в тексте команды
+  $cmd =~ s/"/\\"/g;
+
+  # Получаем переменные GRASS из настроечной таблицы
+  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'grasshome'");
+  my $grasshome = $rv->{rows}[0]->{value};
+  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'ovhome'");
+  my $ovhome = $rv->{rows}[0]->{value};
+  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'grasshost'");
+  my $grasshost = $rv->{rows}[0]->{value};
+
+  # Формирование переменных GRASS окружения
   $env = "export GISBASE=$grasshome;";
   $env = $env . "export GISRC=$ovhome/var/grassrc/.$resourceid;";
   $env = $env . "export LD_LIBRARY_PATH=$grasshome/lib;";
   $env = $env . "export PATH=/usr/local/bin:/bin:/usr/bin:$grasshome/bin:$grasshome/scripts;";
   $env = $env . "export LANG=en_US.UTF-8;";
 
+  # Инициализация MAPSET
   $rcexist = `ssh tomcat\@$grasshost "if [ -f $ovhome/var/grassrc/.$resourceid ]; then echo -n 1; else echo -n 0; fi"`;
   if ($rcexist eq '0') {
     `ssh tomcat\@$grasshost "$env g.gisenv set='GISDBASE=$ovhome/var/grasswp'"`;
@@ -69,23 +100,27 @@ CREATE OR REPLACE FUNCTION admin.ov_ssh(text, text) RETURNS text AS $$
     `ssh tomcat\@$grasshost "$env g.gisenv set='GRASS_GUI=text'"`;
   }
 
+  # Инициализация WORKSPACE
   $wpexist = `ssh tomcat\@$grasshost "if [ -d $ovhome/var/grasswp/ESIMO/$resourceid ]; then echo -n 1; else echo -n 0; fi"`;
   if ($wpexist eq '0') {
     `ssh tomcat\@$grasshost "$env cp -a $ovhome/var/grasswp/ESIMO/NEW $ovhome/var/grasswp/ESIMO/$resourceid"`;
   }
 
+  # Логирование текста команды в файл
   `ssh tomcat\@$grasshost "echo -e '\n[\`date '+%F %H:%M'\`] SSH: $cmd' >> $_SHARED{'logpath'}/$resourceid.log"`;
+  
+  # Выполнение команды на удаленном сервере с инициализацией GRASS окружения
   $stdout = `ssh tomcat\@$grasshost "$env $cmd >> $_SHARED{'logpath'}/$resourceid.log 2>&1"`;
+
   return $stdout;
 $$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_ssh(text, text) IS 'Вызов команды ssh с инициализацией окружения GRASS';
+COMMENT ON FUNCTION admin.ov_ssh(text, text) IS 'Выполнение команды на удаленном сервере с инициализацией GRASS окружения';
 
-
--------------------------------------------------
--- Инициализация глобальных переменных PL\Perl --
--------------------------------------------------
+------------------------------------------------
+-- Инициализация глобальных переменных PLPerl --
+------------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_initPLPerl() RETURNS text AS $$
-  # Инициализация переменных
+  # Инициализация глобальных переменных из настроечной таблицы
   $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'ovhome'");
   $_SHARED{'ovhome'} = $rv->{rows}[0]->{value};
   $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'geoserver'");
@@ -106,9 +141,8 @@ CREATE OR REPLACE FUNCTION admin.ov_initPLPerl() RETURNS text AS $$
   $_SHARED{'nodeid'} = $rv->{rows}[0]->{value};
   $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'version'");
   $_SHARED{'version'} = $rv->{rows}[0]->{value};
-  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'authurl'");
+  $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'authUrl'");
   $_SHARED{'authurl'} = $rv->{rows}[0]->{value};
-
   $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'dbhost'");
   $_SHARED{'dbhost'} = $rv->{rows}[0]->{value};
   $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'dbport'");
@@ -120,6 +154,7 @@ CREATE OR REPLACE FUNCTION admin.ov_initPLPerl() RETURNS text AS $$
   $rv = spi_exec_query("SELECT value FROM admin.config_table WHERE key = 'dbpass'");
   $_SHARED{'dbpass'} = $rv->{rows}[0]->{value};
 
+  # Формирование структуры папок
   $_SHARED{'imgpath'} = "$_SHARED{'ovhome'}/data/resources/surfaces";
   $_SHARED{'mskpath'} = "$_SHARED{'ovhome'}/data/resources/mask";
   $_SHARED{'sqlpath'} = "$_SHARED{'ovhome'}/data/resources/sql";
@@ -140,40 +175,54 @@ CREATE OR REPLACE FUNCTION admin.ov_initPLPerl() RETURNS text AS $$
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_initPLPerl() IS 'Инициализация глобальных переменных PLPerl';
 
-
 -------------------------
 -- Авторизация в JOSSO --
 -------------------------
 CREATE OR REPLACE FUNCTION admin.ov_loginJOSSO() RETURNS text AS $$
+  # Инициализация глобальных переменных PLPerl
   #if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   #}
 
+  # Есть ли доступ к геосерверу?
   $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/`;
   if ($response ne '200') {
-    `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/josso.txt -d "josso_cmd=login&josso_back_to=&josso_username=$_SHARED{'gsuser'}&josso_password=$_SHARED{'gspass'}" $_SHARED{'authurl'}`;
+    # Если нет, авторизуемся в JOSSO и получаем cookies для геосервера
+    `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/josso.txt -d "josso_cmd=login&josso_back_to=&josso_username=$_SHARED{'gsuser'}&josso_password=$_SHARED{'gspass'}" $_SHARED{'authurl'}/login.do`;
     `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/geoserver.txt -b /tmp/josso.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/web/`;
-  }
 
-  $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/`;
-  if ($response eq '200') {
-    return 'Authorization ok';
+    # Еще раз проверяем доступ к геосерверу
+    $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/`;
+    if ($response eq '200') {
+      return 'Authorization ok';
+    }
+    else {
+      return 'Authorization error';
+    }
   }
   else {
-    return 'Authorization error';
+    return 'Already authorized';
   }
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_loginJOSSO() IS 'Авторизация в JOSSO';
 
-----------------------------------
--- Проверка авторизации в JOSSO --
-----------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_isLoggedInJOSSO() RETURNS boolean AS $$
+---------------------------------
+-- Проверка существования слоя --
+---------------------------------
+CREATE OR REPLACE FUNCTION admin.ov_isLayerExists(text, text) RETURNS boolean AS $$
+  my $workspace = $_[0];
+  my $layername = $_[1];
+
+  # Инициализация глобальных переменных PLPerl
   if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   }
 
-  $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/`;
+  # Авторизация в JOSSO
+  spi_exec_query('SELECT admin.ov_loginJOSSO()');
+  
+  # Существует ли слой?
+  $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
   if ($response eq '200') {
     return true;
   }
@@ -181,70 +230,12 @@ CREATE OR REPLACE FUNCTION admin.ov_isLoggedInJOSSO() RETURNS boolean AS $$
     return false;
   }
 $$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_isLoggedInJOSSO() IS 'Проверка авторизации в JOSSO';
-
---------------------------------------------------------------------
--- Проверка существует ли слой, используя resourceid, param, type --
---------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_isLayerExists(text, text, text, text) RETURNS text AS $$
-  my $processid  = $_[0] ne '' ? $_[0] : time;
-  my $resourceid = $_[1];
-  my $param      = $_[2];
-  my $type       = $_[3];
-  my $stageStartTime = time;
-
-  $rv = spi_exec_query("SELECT admin.ov_getWorkspace('$resourceid')");
-  $workspace = $rv->{rows}[0]->{ov_getworkspace};
-  $rv = spi_exec_query("SELECT admin.ov_getLayername('$resourceid', '$param', '$type')");
-  $layername = $rv->{rows}[0]->{ov_getlayername};
-
-  if ($_SHARED{'version'} eq '') {
-    spi_exec_query('SELECT admin.ov_initPLPerl()');
-  }
-  spi_exec_query('SELECT admin.ov_loginJOSSO()');
-  
-  $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
-  if ($response eq '200') {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'isLayerExists', '$stageStartTime', '$stageStartTime', 'INFO', 'Layer $layername exists')");
-    return 'true';
-  }
-  else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'isLayerExists', '$stageStartTime', '$stageStartTime', 'INFO', 'Layer $layername doesnt exist')");
-    return 'false';
-  }
-$$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_isLayerExists(text, text, text, text) IS 'Проверка существует ли слой, используя resourceid, param, type';
-
-------------------------------------------------------------------
--- Проверка существует ли слой, используя workspace и layername --
-------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_isLayerExists(text, text, text) RETURNS text AS $$
-  my $processid = $_[0] ne '' ? $_[0] : time;
-  my $workspace = $_[1];
-  my $layername = $_[2];
-  my $stageStartTime = time;
-
-  if ($_SHARED{'version'} eq '') {
-    spi_exec_query('SELECT admin.ov_initPLPerl()');
-  }
-  spi_exec_query('SELECT admin.ov_loginJOSSO()');
-  
-  $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
-  if ($response eq '200') {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', NULL, NULL, NULL, 'isLayerExists', '$stageStartTime', '$stageStartTime', 'INFO', 'Layer $layername exists')");
-    return 'true';
-  }
-  else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', NULL, NULL, NULL, 'isLayerExists', '$stageStartTime', '$stageStartTime', 'INFO', 'Layer $layername doesnt exist')");
-    return 'false';
-  }
-$$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_isLayerExists(text, text, text) IS 'Проверка существует ли слой, используя workspace и layername';
+COMMENT ON FUNCTION admin.ov_isLayerExists(text, text) IS 'Проверка существования слоя';
 
 ------------------------------------
 -- Проверка существования таблицы --
 ------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_isTableExist(tablename text, schema text) RETURNS boolean AS $$
+CREATE OR REPLACE FUNCTION admin.ov_isTableExists(tablename text, schema text) RETURNS boolean AS $$
 DECLARE
   result text;
 BEGIN
@@ -256,7 +247,7 @@ BEGIN
   END IF;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_isTableExist(text, text) IS 'Проверка существования таблицы';
+COMMENT ON FUNCTION admin.ov_isTableExists(text, text) IS 'Проверка существования таблицы';
 
 ---------------------------------------------------------------------
 -- Конвертация строки в нижний регистр и замена символа "-" на "_" --
@@ -268,9 +259,9 @@ END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_lcc(text) IS 'Конвертация строки в нижний регистр и замена символа "-" на "_"';
 
----------------------------------------------
--- Получение заголовка для публикации слоя --
----------------------------------------------
+------------------------------
+-- Получение заголовка слоя --
+------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_getLayerTitle(resourceid text, param text, type text) RETURNS text AS $$
 DECLARE
   title text;
@@ -304,11 +295,13 @@ BEGIN
 
 --  SELECT replace(title, '<DATE>', date) INTO title;
 
+  -- Договоренность использовать предоставленную функцию
   SELECT GetLayerName(resourceid, param, "type") INTO title;
+  
   RETURN title;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_getLayerTitle(text, text, text) IS 'Получение заголовка для публикации слоя';
+COMMENT ON FUNCTION admin.ov_getLayerTitle(text, text, text) IS 'Получение заголовка слоя';
 
 --------------------------------
 -- Получение описания ресурса --
@@ -320,7 +313,8 @@ BEGIN
   -- Получение поля objectdescription из таблицы resource_md
   EXECUTE 'SELECT objectdescription FROM resource_md WHERE resourceid ilike ''' || resourceid || '''' INTO description;
   IF description IS NULL THEN
-    RAISE EXCEPTION 'Can''t get description for resourceid = %', resourceid;
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getResourceDescription'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get description for resourceid ' || resourceid || ''')';
+--    RAISE EXCEPTION 'Can''t get description for resourceid = %', resourceid;
   END IF;
 
   RETURN description;
@@ -328,9 +322,9 @@ END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getResourceDescription(text) IS 'Получение описания ресурса';
 
--------------------------
--- Получение workspace --
--------------------------
+---------------------------------
+-- Получение workspace ресурса --
+---------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_getWorkspace(resourceid text) RETURNS text AS $$
 DECLARE
   workspace text;
@@ -338,55 +332,59 @@ BEGIN
   -- Получение поля primaryresourceid из таблицы resource_md
   EXECUTE 'SELECT primaryresourceid FROM resource_md WHERE resourceid ilike ''' || resourceid || '''' INTO workspace;
   IF workspace IS NULL THEN
-    RAISE EXCEPTION 'Can''t get workspace for resourceid = %', resourceid;
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getWorkspace'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get workspace for resourceid ' || resourceid || ''')';
+--    RAISE EXCEPTION 'Can''t get workspace for resourceid = %', resourceid;
   END IF;
 
   RETURN workspace;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_getWorkspace(text) IS 'Получение workspace';
+COMMENT ON FUNCTION admin.ov_getWorkspace(text) IS 'Получение workspace ресурса';
 
------------------------------------------------------
--- Получение имени слоя для публикации в Geoserver --
------------------------------------------------------
+-----------------------------
+-- Формирование имени слоя --
+-----------------------------
 CREATE OR REPLACE FUNCTION admin.ov_getLayername(resourceid text, param text, type text) RETURNS text AS $$
 DECLARE
   layername text;
   str text;
 BEGIN
+  -- Если слой точечный, то откидываем param и type
   IF "type" = 'pt' THEN
     str = resourceid;
   ELSE
     str = resourceid || '_' || param || '_' || "type";
   END IF;
-  
+
+  -- Конвертация в нижний регистр и замена символа "-" на "_"
   EXECUTE 'SELECT admin.ov_lcc(''' || str || ''')' INTO layername;
   IF layername IS NULL THEN
-    RAISE EXCEPTION 'Layername is empty';
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getLayername'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Layername is empty'')';
+--    RAISE EXCEPTION 'Layername is empty';
   END IF;
 
   RETURN layername;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_getLayername(text, text, text) IS 'Получение имени слоя для публикации в Geoserver';
+COMMENT ON FUNCTION admin.ov_getLayername(text, text, text) IS 'Формирование имени слоя';
 
--------------------------------------------
--- Получение схемы хранения ресурса в БД --
--------------------------------------------
+--------------------------------------------
+-- Получение схемы хранения ресурса в БИД --
+--------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_getSchema(resourceid text) RETURNS text AS $$
 DECLARE
   schema text;
 BEGIN
   EXECUTE 'SELECT scheme FROM resource_md WHERE resourceid ilike ''' || resourceid || '''' INTO schema;
   IF schema IS NULL THEN
-    RAISE EXCEPTION 'Can''t get DB schema for resourceid = %', resourceid;
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getSchema'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get DB schema for resourceid ' || resourceid || ''')';
+--    RAISE EXCEPTION 'Can''t get DB schema for resourceid = %', resourceid;
   END IF;
 
   RETURN schema;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_getSchema(text) IS 'Получение схемы хранения ресурса в БД';
-
+COMMENT ON FUNCTION admin.ov_getSchema(text) IS 'Получение схемы хранения ресурса в БИД';
 
 -----------------------------------------------
 -- Получение стиля назначенного по умолчанию --
@@ -394,9 +392,8 @@ COMMENT ON FUNCTION admin.ov_getSchema(text) IS 'Получение схемы �
 CREATE OR REPLACE FUNCTION admin.ov_getLayerDefaultStyle(resourceid text, param text, type text) RETURNS text AS $$
 DECLARE
   defaultstyle text = '';
-  s text;
 BEGIN
-  -- Получение поля styles из таблицы admin_table
+  -- Получение поля defaultstyle из таблицы admin_table
   IF "type" = 'pt' THEN
     EXECUTE 'SELECT defaultstyle FROM admin.admin_table WHERE resourceid = ''' || resourceid || 
             ''' AND type = ''' || "type" || '''' INTO defaultstyle;
@@ -405,7 +402,8 @@ BEGIN
             ''' AND param = ''' || param || ''' AND type = ''' || "type" || '''' INTO defaultstyle;
   END IF;
   IF defaultstyle IS NULL THEN
-    RAISE EXCEPTION 'Can''t get default style';
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getLayerDefaultStyle'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get default style'')';
+--    RAISE EXCEPTION 'Can''t get default style';
   END IF;
 
   RETURN defaultstyle;
@@ -413,14 +411,12 @@ END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getLayerDefaultStyle(text, text, text) IS 'Получение стиля назначенного по умолчанию';
 
-
 -----------------------------------------------------
 -- Получение стилей назначенных слою в виде строки --
 -----------------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_getLayerStyles(resourceid text, param text, type text) RETURNS text AS $$
 DECLARE
   styles text = '';
-  s text;
 BEGIN
   -- Получение поля styles из таблицы admin_table
   IF "type" = 'pt' THEN
@@ -431,14 +427,14 @@ BEGIN
             ''' AND param = ''' || param || ''' AND type = ''' || "type" || '''' INTO styles;
   END IF;
   IF styles IS NULL THEN
-    RAISE EXCEPTION 'Can''t get styles';
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getLayerStyles'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get styles'')';
+--    RAISE EXCEPTION 'Can''t get styles';
   END IF;
 
   RETURN styles;
 END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getLayerStyles(text, text, text) IS 'Получение стилей назначенных слою в виде строки';
-
 
 --------------------------------------------------
 -- Получение стилей назначенных слою в виде XML --
@@ -461,7 +457,6 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getLayerStylesXML(text, text, text) IS 'Получение стилей назначенных слою в виде XML';
-
 
 -------------------------------------------
 -- Получение ключевых слов в виде строки --
@@ -502,7 +497,6 @@ END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getLayerKeywords(text) IS 'Получение ключевых слов в виде строки';
 
-
 ----------------------------------------
 -- Получение ключевых слов в виде XML --
 ----------------------------------------
@@ -524,7 +518,6 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getLayerKeywordsXML(text) IS 'Получение ключевых слов в виде XML';
-
 
 -------------------------------------------------------
 -- Получение пространственных границ слоя в виде XML --
@@ -548,7 +541,8 @@ BEGIN
   -- Проверяем наличие колонки геометрии
   EXECUTE 'SELECT column_name FROM information_schema.columns WHERE table_name=''' || tablename || ''' AND table_schema = ''' || schema || ''' AND column_name=''m1253''' INTO m1253;
   IF m1253 IS NULL THEN
-    RAISE EXCEPTION 'No coordinate columns for table = %', tablename;
+    EXECUTE 'SELECT admin.ov_logEvent(''0'', ''' || resourceid || ''', NULL, NULL, ''getLayerBBoxXML'', ''' || round(extract(epoch FROM now())) || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''No coordinate columns for table ' || tablename || ''')';
+--    RAISE EXCEPTION 'No coordinate columns for table = %', tablename;
   END IF;
   
   -- Получение пространственных границ ресурса
@@ -557,7 +551,7 @@ BEGIN
   EXECUTE 'SELECT ST_XMax(ST_Extent(m1253)) FROM ' || resourceid INTO maxx;
   EXECUTE 'SELECT ST_YMax(ST_Extent(m1253)) FROM ' || resourceid INTO maxy;
 
-  -- Генерация XML
+  -- Формируем XML
   IF (minx IS NULL) OR (miny IS NULL) OR (maxx IS NULL) OR (maxy IS NULL) THEN
     RETURN '<minx>-180</minx><miny>-90</miny><maxx>180</maxx><maxy>90</maxy>';
   ELSE
@@ -567,17 +561,18 @@ END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_getLayerBBoxXML(text) IS 'Получение пространственных границ слоя в виде XML';
 
-
 ----------------------------------------------------
 -- Получение информации о сетке растра в виде XML --
 ----------------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_getLayerGridXML(text) RETURNS text AS $$
   my $pathtofile  = $_[0];
   my ($range, $scale, $translate);
-  
+
+  # Запускаем команду gdalinfo для растра
   my $rv = spi_exec_query("SELECT admin.ov_ssh('gdalinfo $pathtofile')");
   my $stdout = $rv->{rows}[0]->{ov_ssh};
 
+  # Парсим вывод команды gdalinfo
   if ( $stdout =~ /Size is (\d+), (\d+)/g ) {
     $range = "<high>$1 $2</high>";
   }
@@ -588,6 +583,7 @@ CREATE OR REPLACE FUNCTION admin.ov_getLayerGridXML(text) RETURNS text AS $$
     $scale = "<scaleX>$1</scaleX><scaleY>$2</scaleY>";
   }
 
+  # Формируем XML
   my $xml = "<range><low>0 0</low>" .
               $range .
             "</range><transform>" .
@@ -595,10 +591,10 @@ CREATE OR REPLACE FUNCTION admin.ov_getLayerGridXML(text) RETURNS text AS $$
             "<shearX>0.0</shearX><shearY>0.0</shearY>" .
               $translate .
             "</transform><crs>EPSG:4326</crs>";
+
   return $xml;
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_getLayerGridXML(text) IS 'Получение информации о сетке растра в виде XML';
-
 
 -------------------------------------------
 -- Обновление title в сохраненных картах --
@@ -609,7 +605,7 @@ DECLARE
   rowcount int;
   layername text;
 BEGIN
-  -- Получение заголовка
+  -- Получение заголовка слоя
   SELECT admin.ov_getLayerTitle(resourceid, param, "type") INTO title;
 
   -- Получение наименования слоя
@@ -618,59 +614,85 @@ BEGIN
   -- Замена части json в сохраненных картах 
   UPDATE admin.savedmaps SET config = regexp_replace(config, '"name":"(.+):' || layername || 
 	'","title":".+"', E'"name":"\\1:' || layername || '","title":"' || title || '"', 'g');
+
+  -- Возвращаем количество обработанных карт
   GET DIAGNOSTICS rowcount = ROW_COUNT;
   RETURN rowcount || ' savedmaps were updated';
 END
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION admin.ov_updateLayerTitleInSavedMaps(text, text, text) IS 'Обновление поля title в сохраненных картах';
 
-
 ---------------------------------------------
 -- Добавление ресурса в очередь обработки  --
 ---------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_pushInQueue(processid text, resourceid text, stageid text) RETURNS text AS $$
+CREATE OR REPLACE FUNCTION admin.ov_pushInQueue(processid text, resourceid text, param text, type text) RETURNS text AS $$
 DECLARE 
   procinqueue int;
   maxproc int;
-  inqueue text;
+  sameprocess text;
+  sameresource text;
 BEGIN
-  EXECUTE 'SELECT processid FROM admin.process_queue WHERE processid = ''' || processid || ''' AND resourceid ilike ''' || resourceid || ''' AND stageid ilike ''' || stageid || '''' INTO inqueue;
-  IF inqueue IS NOT NULL THEN
-    RAISE EXCEPTION 'Stage already in the queue';
-  END IF;
-  
-  EXECUTE 'SELECT DISTINCT ON (processid) processid FROM admin.process_queue';
-  GET DIAGNOSTICS procinqueue = ROW_COUNT;
-  SELECT value FROM admin.config_table WHERE key = 'maxproc' INTO maxproc;
-
-  IF procinqueue <= maxproc THEN
-    EXECUTE 'INSERT INTO admin.process_queue (processid, resourceid, stageid) VALUES (''' || processid || ''', ''' || resourceid || ''', ''' || stageid || ''')';
-    RETURN 'Stage ' || stageid || ' pushed in the queue';
+  -- Проверяем есть ли такой процесс в очереди
+  EXECUTE 'SELECT processid FROM admin.process_queue WHERE processid ilike ''' || processid ||'''' INTO sameprocess;
+  -- Если это тот же самый процесс, то ничего не делаем
+  IF sameprocess IS NOT NULL THEN
+    RETURN 'Nothing to do. It''s the same process.';
   ELSE
-    PERFORM pg_sleep(5);
-    RETURN admin.ov_pushInQueue(processid, resourceid, stageid);
+    -- Проверяем есть ли такой ресурс в очереди
+    IF "type" = 'pt' THEN
+      EXECUTE 'SELECT resourceid FROM admin.process_queue WHERE resourceid ilike ''' || resourceid || ''' AND type ilike ''' || "type" || '''' INTO sameresource;
+    ELSE
+      EXECUTE 'SELECT resourceid FROM admin.process_queue WHERE resourceid ilike ''' || resourceid || ''' AND param ilike ''' || param || ''' AND type ilike ''' || "type" || '''' INTO sameresource;
+    END IF;
+    -- Если процесс новый, но ресурс уже в обработке, то ждем и пробуем заново
+    IF sameresource IS NOT NULL THEN
+      PERFORM pg_sleep(30);
+      RETURN admin.ov_pushInQueue(processid, resourceid, param, "type");
+      --RAISE EXCEPTION 'Resource already in the queue';
+    ELSE
+      -- Если процесс новый и ресурс не обрабатывается, то ставим в очередь
+      -- Получаем количество запущенных процессов
+      EXECUTE 'SELECT DISTINCT ON (processid) processid FROM admin.process_queue';
+      GET DIAGNOSTICS procinqueue = ROW_COUNT;
+      -- Получаем количество ядер процессора
+      SELECT value FROM admin.config_table WHERE key = 'maxproc' INTO maxproc;
+
+      -- Если запущенных процесов меньше чем количество ядер, то ставим в очередь
+      IF procinqueue <= maxproc THEN
+        EXECUTE 'INSERT INTO admin.process_queue (processid, resourceid, param, type) VALUES (''' || processid || ''', ''' || resourceid || ''', ''' || param || ''', ''' || "type" || ''')';
+        RETURN 'Resource ' || resourceid || ' pushed in the queue';
+      ELSE
+        -- иначе ждем и пробуем заново
+        PERFORM pg_sleep(30);
+        RETURN admin.ov_pushInQueue(processid, resourceid, param, "type");
+      END IF;
+    END IF;
   END IF;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_pushInQueue(text, text, text) IS 'Добавление ресурса в очередь обработки';
+COMMENT ON FUNCTION admin.ov_pushInQueue(text, text, text, text) IS 'Добавление ресурса в очередь обработки';
 
 --------------------------------------------
 -- Удаление ресурса из очереди обработки  --
 --------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_popFromQueue(processid text, resourceid text, stageid text) RETURNS text AS $$
+CREATE OR REPLACE FUNCTION admin.ov_popFromQueue(processid text, resourceid text, param text, type text) RETURNS text AS $$
 DECLARE
   rowcount int;
 BEGIN
-  EXECUTE 'DELETE FROM admin.process_queue WHERE processid = ''' || processid || ''' AND  resourceid ilike ''' || resourceid || '''';
+  EXECUTE 'DELETE FROM admin.process_queue WHERE processid ilike ''' || processid || ''' AND resourceid ilike ''' || resourceid || ''' AND param ilike ''' || param || ''' AND type ilike ''' || "type" || '''';
   GET DIAGNOSTICS rowcount = ROW_COUNT;
-  RETURN 'Process #' || processid || ' was deleted from the queue';
+  IF rowcount <> 0 THEN
+    RETURN 'Process #' || processid || ' was deleted from the queue';
+  ELSE
+    RETURN 'Process wasnt deleted from the queue';
+  END IF;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_popFromQueue(text, text, text) IS 'Удаление ресурса из очереди обработки';
+COMMENT ON FUNCTION admin.ov_popFromQueue(text, text, text, text) IS 'Удаление ресурса из очереди обработки';
 
---------------------------------------------------
--- Добавление колонки геометрии в точечный слой --
---------------------------------------------------
+--------------------------------------------------------------
+-- Добавление колонки геометрии в таблицу точечного ресурса --
+--------------------------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_addGeometryColumn(processid text, resourceid text) RETURNS text AS $$
 DECLARE
   schema text;
@@ -685,9 +707,13 @@ BEGIN
 
   -- Получаем имя таблицы для ресурса в БД
   EXECUTE 'SELECT admin.ov_lcc(''' || resourceid || ''')' INTO tablename;
-  
+
   -- Получение схемы хранения ресурса в БД
   EXECUTE 'SELECT admin.ov_getSchema(''' || resourceid || ''')' INTO schema;
+  IF schema IS NULL THEN
+    EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addGeometryColumn'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get DB schema for resourceid ' || resourceid || ''')';
+    RETURN 'Cant get DB schema for resourceid ' || resourceid;
+  END IF;
     
   -- Проверка существует ли колонка с геометрией?
   -- EXECUTE 'SELECT DropGeometryColumn(''' || schema || ''',''' || tablename || ''',''m1253'')';
@@ -698,7 +724,8 @@ BEGIN
     EXECUTE 'SELECT m4312 FROM ' || schema || '.' || tablename || ' LIMIT 1' INTO m4312;
     EXECUTE 'SELECT m4311 FROM ' || schema || '.' || tablename || ' LIMIT 1' INTO m4311;
     IF m4312 IS NULL OR m4311 IS NULL THEN
-      RAISE EXCEPTION 'No coordinate columns for table = %', tablename;
+      EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addGeometryColumn'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''No coordinate columns for table ' || tablename || ''')';
+--      RAISE EXCEPTION 'No coordinate columns for table = %', tablename;
     END IF;
   
     -- Удаление строк с пыстыми координатами
@@ -727,7 +754,7 @@ BEGIN
     EXECUTE 'SELECT m1253 FROM ' || schema || '.' || tablename || ' LIMIT 1' INTO m1253;
     IF m1253 IS NULL THEN
       EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addGeometryColumn'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Failed to create geometry column for table ' || tablename || ''')';
-      RAISE EXCEPTION 'Failed to create geometry column for table = %', tablename;
+      --RAISE EXCEPTION 'Failed to create geometry column for table = %', tablename;
       RETURN 'Failed to create geometry column for table = ' || tablename;
     ELSE
       EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addGeometryColumn'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''INFO'', ''Geometry column created successfully'')';
@@ -739,12 +766,11 @@ BEGIN
   END IF;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_addGeometryColumn(text, text) IS 'Добавление колонки геометрии в точечный слой';
+COMMENT ON FUNCTION admin.ov_addGeometryColumn(text, text) IS 'Добавление колонки геометрии в таблицу точечного ресурса';
 
-
--------------------------------------------------
--- Добавление первичного ключа в точечный слой --
--------------------------------------------------
+---------------------------------------------------
+-- Добавление первичного ключа в таблицу точечного ресурса --
+---------------------------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_addPrimaryKey(processid text, resourceid text) RETURNS text AS $$
 DECLARE
   schema text;
@@ -760,6 +786,10 @@ BEGIN
 
   -- Получение схемы хранения ресурса в БД
   EXECUTE 'SELECT admin.ov_getSchema(''' || resourceid || ''')' INTO schema;
+  IF schema IS NULL THEN
+    EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addGeometryColumn'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Cant get DB schema for resourceid ' || resourceid || ''')';
+    RETURN 'Cant get DB schema for resourceid ' || resourceid;
+  END IF;
 
   -- Проверка существует ли колонка с первичным ключом?
   EXECUTE 'SELECT column_name FROM information_schema.columns WHERE table_name=''' || tablename || 
@@ -773,7 +803,7 @@ BEGIN
     EXECUTE 'SELECT m1232 FROM ' || schema || '.' || tablename || ' LIMIT 1' INTO pk_exist;
     IF pk_exist IS NULL THEN
       EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addPrimaryKey'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''ERROR'', ''Failed to create Primary Key'')';
-      RAISE EXCEPTION 'Problem with creation primary key for table = %', tablename;
+      --RAISE EXCEPTION 'Problem with creation primary key for table = %', tablename;
       RETURN 'Failed to create Primary Key';
     ELSE
       EXECUTE 'SELECT admin.ov_logEvent(''' || processid || ''', ''' || resourceid || ''', NULL, NULL, ''addPrimaryKey'', ''' || stageStartTime || ''', ''' || round(extract(epoch FROM now())) || ''', ''INFO'', ''Primary Key created successfully'')';
@@ -785,136 +815,169 @@ BEGIN
   END IF;
 END
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION admin.ov_addPrimaryKey(text, text) IS 'Добавление первичного ключа в точечный слой';
+COMMENT ON FUNCTION admin.ov_addPrimaryKey(text, text) IS 'Добавление первичного ключа в таблицу точечного ресурса';
 
-------------------------------------------------------
--- Удаление слоя используя resourceid, param и type --
-------------------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_removeLayer(text, text, text, text) RETURNS text AS $$
-  my $processid  = $_[0] ne '' ? $_[0] : time;
-  my $resourceid = $_[1];
-  my $param      = $_[2];
-  my $type       = $_[3];
+-------------------
+-- Удаление слоя --
+-------------------
+CREATE OR REPLACE FUNCTION admin.ov_removeLayer(text, text) RETURNS text AS $$
+  my $workspace = $_[0];
+  my $layername = $_[1];
   my $stageStartTime = time;
-
+  
+  # Инициализация глобальных переменных PLPerl
   if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   }
-  spi_exec_query('SELECT admin.ov_loginJOSSO()');
-  
-  $rv = spi_exec_query("SELECT admin.ov_getWorkspace('$resourceid')");
-  $workspace = $rv->{rows}[0]->{ov_getworkspace};
-  $rv = spi_exec_query("SELECT admin.ov_getLayername('$resourceid', '$param', '$type')");
-  $layername = $rv->{rows}[0]->{ov_getlayername};
 
-  # Получаем схему БД для ресурса
-  $rv = spi_exec_query("SELECT admin.ov_getSchema('$resourceid')");
-  $schema = $rv->{rows}[0]->{ov_getschema};
-
-  if (type eq 'pt' or type eq 'ln') {
-    $response1 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
-    $response2 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/datastores/bid/featuretypes/$layername`;
-  }
-  elsif (type eq 'sf') {
-    $response1 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
-    $response2 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/coveragestores/$layername/coverages/$layername`;
-    $response2 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/coveragestores/$layername`;
-  }
-
-  spi_exec_query("SELECT admin.ov_reloadGeoserverNodes()");
-
-  if ($response1 eq '200') {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'removeLayer', '$stageStartTime', '".time."', 'INFO', 'Layer $layername was successfully removed')");
-    return "Layer $layername was successfully removed";
-  }
-  else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'removeLayer', '$stageStartTime', '".time."', 'ERROR', 'Failed to remove layer $layername with code $response1')");
-    return "Failed to remove layer $layername with code $response1";
-  }
-$$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_removeLayer(text, text, text, text) IS 'Удаление слоя используя resourceid, param и type';
-
-
----------------------------------------------------
--- Удаление слоя используя workspace и layername --
----------------------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_removeLayer(text, text, text) RETURNS text AS $$
-  my $processid = $_[0] ne '' ? $_[0] : time;
-  my $workspace = $_[1];
-  my $layername = $_[2];
-  my $stageStartTime = time;
-  
-  if ($_SHARED{'version'} eq '') {
-    spi_exec_query('SELECT admin.ov_initPLPerl()');
-  }
+  # Авторизация в JOSSO
   spi_exec_query('SELECT admin.ov_loginJOSSO()');
 
+  # Удаление PostGIS слоя
   if ($layername =~ /[\d+|ln|tr|pl]$/) {
     $response1 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
     $response2 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/datastores/bid/featuretypes/$layername`;
   }
+  # Удаление GeoTIFF слоя
   elsif ($layername =~ /sf$/) {
     $response1 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
     $response2 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/coveragestores/$layername/coverages/$layername`;
-    $response2 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/coveragestores/$layername`;
+    $response3 = `curl -XDELETE --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/workspaces/$workspace/coveragestores/$layername`;
   }
 
+  # Перезагрузка каталога геосервера
   spi_exec_query("SELECT admin.ov_reloadGeoserverNodes()");
 
   if ($response1 eq '200') {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', NULL, NULL, NULL, 'removeLayer', '$stageStartTime', '".time."', 'INFO', 'Layer $layername was successfully removed')");
     return "Layer $layername was successfully removed";
   }
   else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', NULL, NULL, NULL, 'removeLayer', '$stageStartTime', '".time."', 'ERROR', 'Failed to remove layer $layername with code $response1')");
     return "Failed to remove layer $layername with code $response1";
   }
 $$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_removeLayer(text, text, text) IS 'Удаление слоя используя workspace и layername';
-
+COMMENT ON FUNCTION admin.ov_removeLayer(text, text) IS 'Удаление слоя';
 
 ------------------------
 -- Создание workspace --
 ------------------------
 CREATE OR REPLACE FUNCTION admin.ov_createWorkspace(text) RETURNS text AS $$
-  $resourceid  = $_[0];
+  my $resourceid  = $_[0];
   
+  # Инициализация глобальных переменных PLPerl
   if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   }
+
+  # Авторизация в JOSSO
   spi_exec_query('SELECT admin.ov_loginJOSSO()');
 
+  # Получаем workspace для ресурса
   $rv = spi_exec_query("SELECT admin.ov_getWorkspace('$resourceid')");
-  $workspace = $rv->{rows}[0]->{ov_getworkspace};
+  my $workspace = $rv->{rows}[0]->{ov_getworkspace};
 
-  # Получаем схему БД для ресурса
-  $rv = spi_exec_query("SELECT admin.ov_getSchema('$resourceid')");
-  $schema = $rv->{rows}[0]->{ov_getschema};
+  # Проверяем существует ли такой workspace
+  my $cmd = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " .
+            "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+            "$_SHARED{'geoserver'}/rest/workspaces/$workspace";
+  my $response = qx($cmd);
 
-  $cmd = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " .
-         "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
-         "$_SHARED{'geoserver'}/rest/workspaces/$workspace";
-  $response = qx($cmd);
   if ($response eq '200') {
-    return "Workspace $workspace alredy exists";
+    spi_exec_query("SELECT admin.ov_logEvent(NULL, NULL, NULL, NULL, 'createWorkspace', '".time."', '".time."', 'INFO', 'Workspace $workspace already exists')");
+    return "Workspace $workspace already exists";
   }
   else {
-    $cmd1 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+    # Создаем workspace
+    # !!! Если при создании появляется ошибка 500, значит проблемы с JOSSO
+    $cmd1 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " .
             "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
             "-XPOST -H 'Content-type: application/xml' " .
             "-d '<workspace><name>$workspace</name></workspace>' " . 
             "$_SHARED{'geoserver'}/rest/workspaces";
 
-    $cmd2 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+    # Создаем namespace
+    $cmd2 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " .
             "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
             "-XPUT -H 'Content-type: application/xml' " .
             "-d '<namespace><prefix>$workspace</prefix><uri>$workspace</uri></namespace>' " .
             "$_SHARED{'geoserver'}/rest/namespaces/$workspace";
 
-#########################################################################################################################
-########### JNDI Store необходимо проверять не зависимо от существования Workspace ######################################
-#########################################################################################################################
-    $cmd3 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+    $res1 = qx($cmd1);
+    $res2 = qx($cmd2);
+
+    # Прописываем title и abstract для workspace
+    $rv = spi_exec_query("SELECT title FROM admin.wms_catalog WHERE workspace ilike '$workspace'");
+    my $title = $rv->{rows}[0]->{title};
+    $rv = spi_exec_query("SELECT description FROM admin.wms_catalog WHERE workspace ilike '$workspace'");
+    my $abstract = $rv->{rows}[0]->{description};
+
+    if ($title ne '' and $abstract ne '') {
+#    $cmd3 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+#            "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+#            "-XPUT -H 'Content-type: application/xml' " .
+#            "-d '<wms><title>foo2</title><abstrct>bar2</abstrct></wms>' " .
+#            "$_SHARED{'geoserver'}/rest/services/wms/workspaces/$workspace/settings";
+      $cmd3 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+              "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+              "-XPUT -H 'Content-type: application/xml' " .
+              "-d '<settings><contact><addressState>$abstract</addressState><contactPosition>$title</contactPosition></contact></settings>' " .
+              "$_SHARED{'geoserver'}/rest/workspaces/$workspace/settings";
+      $res3 = qx($cmd3);
+    }
+
+    spi_exec_query("SELECT admin.ov_reloadGeoserverNodes()");
+
+    # Итоговая проверка
+    $cmd = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+           "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+           "$_SHARED{'geoserver'}/rest/workspaces/$workspace";
+    $response = qx($cmd);
+  
+    if ($response eq '200') {
+      spi_exec_query("SELECT admin.ov_logEvent(NULL, NULL, NULL, NULL, 'createWorkspace', '".time."', '".time."', 'INFO', 'Workspace $workspace created successfully')");
+      return "Workspace $workspace created successfully";
+    }
+    else {
+      spi_exec_query("SELECT admin.ov_logEvent(NULL, NULL, NULL, NULL, 'createWorkspace', '".time."', '".time."', 'ERROR', 'Failed to create workspace $workspace, with codes $res1, $res2, $res3')");
+      return "Failed to create workspace $workspace, with codes $res1, $res2, $res3";
+    }
+  }
+$$ LANGUAGE plperlu;
+COMMENT ON FUNCTION admin.ov_createWorkspace(text) IS 'Создание workspace';
+
+----------------------------
+-- Создание PostGIS Store --
+----------------------------
+CREATE OR REPLACE FUNCTION admin.ov_createPostgisStore(text) RETURNS text AS $$
+  my $resourceid  = $_[0];
+  
+  # Инициализация глобальных переменных PLPerl
+  if ($_SHARED{'version'} eq '') {
+    spi_exec_query('SELECT admin.ov_initPLPerl()');
+  }
+
+  # Авторизация в JOSSO
+  spi_exec_query('SELECT admin.ov_loginJOSSO()');
+
+  # Получаем workspace для ресурса
+  $rv = spi_exec_query("SELECT admin.ov_getWorkspace('$resourceid')");
+  my $workspace = $rv->{rows}[0]->{ov_getworkspace};
+
+  # Проверяем существует store
+  my $cmd = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " .
+            "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+            "$_SHARED{'geoserver'}/rest/workspaces/$workspace/datastores/bid";
+  my $response = qx($cmd);
+
+  if ($response eq '200') {
+    return "Datastore bid already exists";
+  }
+  else {
+    # Получаем схему БД для ресурса
+    $rv = spi_exec_query("SELECT admin.ov_getSchema('$resourceid')");
+    my $schema = $rv->{rows}[0]->{ov_getschema};
+
+    # Создаем datastore
+    $cmd1 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
             "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
             "-XPOST -H 'Content-type: application/xml' " .
             "-d '<dataStore>" .
@@ -936,50 +999,38 @@ CREATE OR REPLACE FUNCTION admin.ov_createWorkspace(text) RETURNS text AS $$
                 "</connectionParameters>" .
             "</dataStore>' " .
             "$_SHARED{'geoserver'}/rest/workspaces/$workspace/datastores";
+            
     $res1 = qx($cmd1);
-    $res2 = qx($cmd2);
-    $res3 = qx($cmd3);
-    
-    spi_exec_query("SELECT admin.ov_reloadGeoserverNodes()");
-  }
+
+    # Итоговая проверка
+    $cmd = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
+           "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+           "$_SHARED{'geoserver'}/rest/workspaces/$workspace/datastores/bid";
+    $response = qx($cmd);
   
-  $cmd = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
-         "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
-         "$_SHARED{'geoserver'}/rest/workspaces/$workspace";
-  $response = qx($cmd);
-  if ($response eq '200') {
-    return "Workspace $workspace created successfully";
-  }
-  else {
-    return "Failed to create workspace $workspace, with codes $res1, $res2, $res3";
+    if ($response eq '200') {
+      return "Datastore bid created successfully";
+    }
+    else {
+      return "Failed to create datastore bid, with codes $res1";
+    }
   }
 $$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_createWorkspace(text) IS 'Создание workspace';
-
---------------------------------------
--- Добавление ресурса в wms_catalog --
---------------------------------------
-CREATE OR REPLACE FUNCTION admin.ov_addResourceToWmsCatalog(text) RETURNS text AS $$
-  my $resourceid = $_[0];
-  
-  if ($_SHARED{'version'} eq '') {
-    spi_exec_query('SELECT admin.ov_initPLPerl()');
-  }
-  spi_exec_query('SELECT admin.ov_loginJOSSO()');
-
-
-$$ LANGUAGE plperlu;
-COMMENT ON FUNCTION admin.ov_addResourceToWmsCatalog(text) IS 'Добавление ресурса в wms_catalog';
+COMMENT ON FUNCTION admin.ov_createPostgisStore(text) IS 'Создание PostGIS Store';
 
 ------------------------------
 -- Перезагрузка геосерверов --
 ------------------------------
 CREATE OR REPLACE FUNCTION admin.ov_reloadGeoserverNodes() RETURNS text AS $$
-  if ($_SHARED{'gsnodes'} eq '') {
+  # Инициализация глобальных переменных PLPerl
+  if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   }
+
+  # Авторизация в JOSSO
   spi_exec_query('SELECT admin.ov_loginJOSSO()');
 
+  # Перезагрузка по очереди геосерверов указанных в config_table
   $error = '';
   @nodes = split(/,/, $_SHARED{'gsnodes'});
   foreach $node (@nodes) {
@@ -990,6 +1041,7 @@ CREATE OR REPLACE FUNCTION admin.ov_reloadGeoserverNodes() RETURNS text AS $$
      $error = 't' if $res ne '200' ;
   }
 
+  # Были ошибки?
   if ($error eq 't') {
     return 'Perhaps there was an error when the geoserver nodes reloads.'
   }
@@ -1009,8 +1061,8 @@ CREATE OR REPLACE FUNCTION admin.ov_logEvent(text, text, text, text, text, text,
   my $processID         = 'IRBuilder';
   my $processInstanceID = $_[0]; # 123456789
   my $processObjectID   = $_[1]; # RU_Hydrometcentre_42
-  my $param             = $_[2] ne '' ? "'$_[2]'" : "NULL";
-  my $type              = $_[3] ne '' ? "'$_[3]'" : "NULL";
+  my $param             = $_[2] ne '' ? "''$_[2]''" : "NULL";
+  my $type              = $_[3] ne '' ? "''$_[3]''" : "NULL";
   my $processSubjectID  = "$nodeID;10.0.5.11";
   my $processStageID    = $_[4];
   my $dateStartPlanned  = '';
@@ -1021,13 +1073,11 @@ CREATE OR REPLACE FUNCTION admin.ov_logEvent(text, text, text, text, text, text,
   my $errorType         = '';
   my $messageText       = $_[8];
 
-#  `export PGPASSWORD=$_SHARED{'dbpass'}; 
-#   echo "INSERT INTO admin.process_log (processid, resourceid, param, type, stageid, datestart, datestop, loglevel, message) 
-#         VALUES ('$processInstanceID', '$processObjectID', $param, $type, '$processStageID', '$dateStartReal', '$dateFinish', '$logLevel', '$messageText')" | 
-#   psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
+  spi_exec_query("SELECT admin.ov_psql('INSERT INTO admin.process_log (processid, resourceid, param, type, stageid, datestart, datestop, loglevel, message) 
+                  VALUES (''$processInstanceID'', ''$processObjectID'', $param, $type, ''$processStageID'', ''$dateStartReal'', ''$dateFinish'', ''$logLevel'', ''$messageText'')')");
 
-  spi_exec_query("INSERT INTO admin.process_log (processid, resourceid, param, type, stageid, datestart, datestop, loglevel, message) 
-                  VALUES ('$processInstanceID', '$processObjectID', $param, $type, '$processStageID', '$dateStartReal', '$dateFinish', '$logLevel', '$messageText')");
+  #spi_exec_query("INSERT INTO admin.process_log (processid, resourceid, param, type, stageid, datestart, datestop, loglevel, message) 
+  #                VALUES ('$processInstanceID', '$processObjectID', $param, $type, '$processStageID', '$dateStartReal', '$dateFinish', '$logLevel', '$messageText')");
 
   return 'nothing to return';
 $$ LANGUAGE plperlu;
@@ -1048,6 +1098,29 @@ COMMENT ON FUNCTION admin.ov_logEvent(text, text, text, text, text, text, text, 
 ----------------
 -- Public API --
 ----------------
+--------------------------------------------------------------------
+-- Автоматическая обработка всех ресурсов описанных в admin_table --
+--------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION admin.ov_processAllResources() RETURNS setof text AS $$
+DECLARE
+  r record;
+  result text;
+  processid int;
+BEGIN
+  EXECUTE 'SELECT round(extract(epoch FROM now()))' INTO processid;
+  
+  FOR r IN SELECT * FROM admin.admin_table ORDER BY resourceid LOOP
+    --PERFORM admin.ov_psql('SELECT admin.ov_pushInQueue('''|| processid ||''', '''|| r.resourceid ||''', '''|| coalesce(r.param, '') ||''', '''|| r.type ||''')');
+    SELECT admin.ov_psqlb('SELECT admin.ov_processResource('''|| processid ||''', '''|| r.resourceid ||''', '''|| coalesce(r.param, '') ||''', '''|| r.type ||''')') INTO result;
+    processid = processid + 1;
+    --raise notice '%', result;
+    RETURN NEXT result;
+  END LOOP;
+return;
+END
+$$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION admin.ov_processAllResources() IS 'Автоматическая обработка всех ресурсов описанных в admin_table';
+
 ---------------------------------------------------------------
 -- Автоматическая обработка ресурса описанного в admin_table --
 ---------------------------------------------------------------
@@ -1082,24 +1155,29 @@ CREATE OR REPLACE FUNCTION admin.ov_processResource(text, text, text, text) RETU
   }
 
   if ($action =~ /builddata/) {
-     $result1 = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_createResource('$processid', '$resourceid', '$param', '$type')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-     $result1 =~ s/[\r\n]+//g;
+     $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_createResource(''$processid'', ''$resourceid'', ''$param'', ''$type'')')");
+     $result1 = $rv->{rows}[0]->{ov_psql};
   }
   if ($action =~ /publishlayer/) {
-     $result2 = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_publishResource('$processid', '$resourceid', '$param', '$type')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-     $result2 =~ s/[\r\n]+//g;
+     $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_publishResource(''$processid'', ''$resourceid'', ''$param'', ''$type'')')");
+     $result2 = $rv->{rows}[0]->{ov_psql};
   }
   if ($action =~ /updatesavedmaps/) {
-     $result3 = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_updateLayerTitleInSavedMaps('$resourceid', '$param', '$type')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-     $result3 =~ s/[\r\n]+//g;
+     $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_updateLayerTitleInSavedMaps(''$resourceid'', ''$param'', ''$type'')')");
+     $result3 = $rv->{rows}[0]->{ov_psql};
   }
 
   $rv = spi_exec_query("SELECT loglevel FROM admin.process_log WHERE processid = '$processid' AND loglevel ilike 'ERROR'");
-  $errcount = $rv->{rows}[0]->{loglevel};
+  $err = $rv->{rows}[0]->{loglevel};
 
-  spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'INFO', '$result1. $result2. $result3.')");
-
-  return "$errcount $result1. $result2. $result3.";
+  if ($err ne '') {
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'ERROR', '$result1. $result2. $result3.')");
+    return "$result1. $result2. $result3.";
+  }
+  else {
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'INFO', '$result1. $result2. $result3.')");
+    return "$result1. $result2. $result3.";
+  }  
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_processResource(text, text, text, text) IS 'Автоматическая обработка ресурса описанного в admin_table';
 
@@ -1178,7 +1256,7 @@ CREATE OR REPLACE FUNCTION admin.ov_createPoints(text, text) RETURNS text AS $$
   my $resourceid = $_[1];
   my $stageStartTime = time;
 
-  #spi_exec_query("SELECT admin.ov_pushInQueue('$processid', '$resourceid', 'createPoints')");
+  #spi_exec_query("SELECT admin.ov_pushInQueue('$processid', '$resourceid', '', 'pt')");
 
   if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
@@ -1186,12 +1264,12 @@ CREATE OR REPLACE FUNCTION admin.ov_createPoints(text, text) RETURNS text AS $$
 
   # Создание колонки геометрии и первичного ключа для таблицы точек
   # Использование psql необходимо из-за невозможности выполнить транзакцию в процедуре PlPgSQL
-  $result1 = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_addGeometryColumn('$processid', '$resourceid')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-  $result2 = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_addPrimaryKey('$processid', '$resourceid')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-  $result1 =~ s/[\r\n]+$//g;
-  $result2 =~ s/[\r\n]+$//g;
+  $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_addGeometryColumn(''$processid'', ''$resourceid'')')");
+  $result1 = $rv->{rows}[0]->{ov_psql};
+  $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_addPrimaryKey(''$processid'', ''$resourceid'')')");
+  $result2 = $rv->{rows}[0]->{ov_psql};
 
-  #spi_exec_query("SELECT admin.ov_popFromQueue('$processid', '$resourceid', 'createPoints')");
+  spi_exec_query("SELECT admin.ov_popFromQueue('$processid', '$resourceid', '', 'pt')");
 
   spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'createPoints', '$stageStartTime', '".time."', 'INFO', '$result1. $result2.')");
   return "$result1. $result2.";
@@ -1207,14 +1285,14 @@ CREATE OR REPLACE FUNCTION admin.ov_createSurface(text, text, text, text) RETURN
   my $param       = $_[2];
   my $cellsize    = $_[3];
 
-  #spi_exec_query("SELECT admin.ov_pushInQueue('$processid', '$resourceid', 'createSurface')");
+  #spi_exec_query("SELECT admin.ov_pushInQueue('$processid', '$resourceid', '$param', 'sf')");
 
   if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   }
 
-  my $result = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_createPoints('$processid', '$resourceid')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-  $result =~ s/[\r\n]+$//g;
+  $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_createPoints(''$processid'', ''$resourceid'')')");
+  $result = $rv->{rows}[0]->{ov_psql};
 
   my $stageStartTime = time;
 
@@ -1226,6 +1304,8 @@ CREATE OR REPLACE FUNCTION admin.ov_createSurface(text, text, text, text) RETURN
   my $resource = $rv->{rows}[0]->{ov_lcc};
 
   # Импорт точек из БД в GRASS
+  # Внимание! Так как импортированные точки не удаляются после обработки ресурса
+  # требуется достаточно свободного места на узле
   #spi_exec_query("SELECT admin.ov_ssh('$resource', 'v.external dsn=\"PG:host=$_SHARED{'dbhost'} port=$_SHARED{'dbport'} dbname=$_SHARED{'dbname'} user=$_SHARED{'dbuser'} password=$_SHARED{'dbpass'}\" layer=$schema.$resource output=$resource --overwrite')");
 
   ### Здесь начинается магия ###
@@ -1256,7 +1336,7 @@ CREATE OR REPLACE FUNCTION admin.ov_createSurface(text, text, text, text) RETURN
   ### Магия закончилась ###
   
   # Установка размера ячейки
-  $cellsize = '0.2' if ($cellsize eq '');
+  $cellsize = 0.2 if $cellsize eq '';
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'g.region -p vect=$resource res=$cellsize')");
 
   # Построение поверхности используя алгоритм IDW  
@@ -1266,9 +1346,9 @@ CREATE OR REPLACE FUNCTION admin.ov_createSurface(text, text, text, text) RETURN
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'r.colors map=$resource\_$param\_sf color=grey')");
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'r.out.gdal input=$resource\_$param\_sf output=$_SHARED{'imgpath'}/$resource\_$param\_sf.tif format=GTiff type=Int32 createopt=\"TFW=YES\"')");
 
-  #spi_exec_query("SELECT admin.ov_popFromQueue('$processid', '$resource', 'createSurface')");
+  spi_exec_query("SELECT admin.ov_popFromQueue('$processid', '$resourceid', '$param', 'sf')");
 
-  # Проверка
+  # Итоговая проверка
   $rv = spi_exec_query("SELECT admin.ov_ssh('[ -f $_SHARED{'imgpath'}/$resource\_$param\_sf.tif ] && echo -n t || echo -n f')");
   $exist = $rv->{rows}[0]->{ov_ssh};
   if ($exist eq 't') {
@@ -1276,7 +1356,7 @@ CREATE OR REPLACE FUNCTION admin.ov_createSurface(text, text, text, text) RETURN
     return "Surface $resource\_$param\_sf created successfully";
   }
   else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'createSurface', '$stageStartTime', '".time."', 'ERROR', 'Error while creating the surface $resource\_$param\_sf')");
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'createSurface', '$stageStartTime', '".time."', 'ERROR', '$exist Error while creating the surface $resource\_$param\_sf')");
     return "Error while creating the surface $resource\_$param\_sf";
   }
 $$ LANGUAGE plperlu;
@@ -1294,14 +1374,14 @@ CREATE OR REPLACE FUNCTION admin.ov_createIsolines(text, text, text, text, text,
   my $minlevel    = $_[5];
   my $maxlevel    = $_[6];
 
-  #spi_exec_query("SELECT admin.ov_pushInQueue('$processid', '$resourceid', 'createIsolines')");
+  #spi_exec_query("SELECT admin.ov_pushInQueue('$processid', '$resourceid', '$param', 'ln')");
 
   if ($_SHARED{'version'} eq '') {
     spi_exec_query('SELECT admin.ov_initPLPerl()');
   }
 
-  my $result = `export PGPASSWORD=$_SHARED{'dbpass'}; echo "SELECT admin.ov_createSurface('$processid', '$resourceid', '$param', '$cellsize')" | psql -t -h localhost -p $_SHARED{'dbport'} -U $_SHARED{'dbuser'} $_SHARED{'dbname'}`;
-  $result =~ s/[\r\n]+$//g;
+  $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_createSurface(''$processid'', ''$resourceid'', ''$param'', ''$cellsize'')')");
+  $result = $rv->{rows}[0]->{ov_psql};
 
   my $stageStartTime = time;
 
@@ -1312,15 +1392,17 @@ CREATE OR REPLACE FUNCTION admin.ov_createIsolines(text, text, text, text, text,
   $rv = spi_exec_query("SELECT admin.ov_lcc('$resourceid')");
   my $resource = $rv->{rows}[0]->{ov_lcc};  
 
+  $step = 1 if $step eq '';
+
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'r.in.gdal input=$_SHARED{'imgpath'}/$resource\_$param\_sf.tif output=$resource\_$param\_sf --overwrite')");
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'r.contour input=$resource\_$param\_sf output=$resource\_$param\_ln step=$step minlevel=$minlevel maxlevel=$maxlevel --overwrite')");
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'v.generalize input=$resource\_$param\_ln output=$resource\_$param\_ln_smooth method=boyle threshold=1.0 look_ahead=4 -c --overwrite')");
   spi_exec_query("SELECT admin.ov_ssh('$resource', 'v.out.ogr -s input=$resource\_$param\_ln_smooth olayer=$schema.$resource\_$param\_ln dsn=\"PG:host=$_SHARED{'dbhost'} port=$_SHARED{'dbport'} dbname=$_SHARED{'dbname'} user=$_SHARED{'dbuser'} password=$_SHARED{'dbpass'}\" type=line format=PostgreSQL lco=\"OVERWRITE=YES,GEOMETRY_NAME=the_geom,FID=id\" --overwrite')");
 
-  #spi_exec_query("SELECT admin.ov_popFromQueue('$processid', '$resource', 'createIsolines')");
+  spi_exec_query("SELECT admin.ov_popFromQueue('$processid', '$resourceid', '$param', 'ln')");
 
-  $rv = spi_exec_query("SELECT admin.ov_isTableExist('$resource\_$param\_ln', '$schema')");
-  $exist = $rv->{rows}[0]->{ov_istableexist};
+  $rv = spi_exec_query("SELECT admin.ov_isTableExists('$resource\_$param\_ln', '$schema')");
+  $exist = $rv->{rows}[0]->{ov_istableexists};
   if ($exist eq 't') {
     spi_exec_query("DELETE FROM $schema.$resource\_$param\_ln WHERE ST_Length(the_geom) < 10.0");
     spi_exec_query("ALTER TABLE $schema.$resource\_$param\_ln RENAME COLUMN \"level\" TO $param");
@@ -1472,10 +1554,12 @@ CREATE OR REPLACE FUNCTION admin.ov_publishPostgis(text, text, text, text, text,
 
   $rv = spi_exec_query("SELECT admin.ov_createWorkspace('$resourceid')");
   $createWorkspaceLog = $rv->{rows}[0]->{ov_createworkspace};
+  $rv = spi_exec_query("SELECT admin.ov_createPostgisStore('$resourceid')");
+  $createPostgisStoreLog = $rv->{rows}[0]->{ov_createpostgisstore};
 
   $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
   if ($response eq '200') {
-    spi_exec_query("SELECT admin.ov_removeLayer('$processid', '$workspace', '$layername')");
+    spi_exec_query("SELECT admin.ov_removeLayer('$workspace', '$layername')");
   }
   
   $cmd1 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
@@ -1521,17 +1605,17 @@ CREATE OR REPLACE FUNCTION admin.ov_publishPostgis(text, text, text, text, text,
 
   spi_exec_query("SELECT admin.ov_reloadGeoserverNodes()");
 
-  $rv = spi_exec_query("SELECT admin.ov_isLayerExists('$processid', '$workspace', '$layername')");
+  $rv = spi_exec_query("SELECT admin.ov_isLayerExists('$workspace', '$layername')");
   $exists = $rv->{rows}[0]->{ov_islayerexists};
 
-  if ($exists eq 'true') {
+  if ($exists eq 't') {
     spi_exec_query("UPDATE admin.admin_table SET publishedonce = true WHERE resourceid = '$resourceid' AND type = '$type'");
     spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'publishPostgis', '$stageStartTime', '".time."', 'INFO', 'Layer $layername published successfully')");
-    return "$createWorkspaceLog. Layer $layername published successfully";
+    return "$createWorkspaceLog. $createPostgisStoreLog. Layer $layername published successfully";
   }
   else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'publishPostgis', '$stageStartTime', '".time."', 'ERROR', 'Failed to publish layer $layername')");
-    return "$createWorkspaceLog. Failed to publish layer $layername, with codes $res1, $res2";
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'publishPostgis', '$stageStartTime', '".time."', 'ERROR', 'Failed to publish layer $layername, with codes $res1, $res2')");
+    return "$createWorkspaceLog. $createPostgisStoreLog. Failed to publish layer $layername, with codes $res1, $res2";
   }
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_publishPostgis(text, text, text, text, text, text, text, text, text, text, text) IS 'Публикация пространственной таблицы Postgis';
@@ -1590,7 +1674,7 @@ CREATE OR REPLACE FUNCTION admin.ov_publishGeoTIFF(text, text, text, text, text,
 
   my $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/layers/$workspace\:$layername`;
   if ($response eq '200') {
-    spi_exec_query("SELECT admin.ov_removeLayer('$processid', '$workspace', '$layername')");
+    spi_exec_query("SELECT admin.ov_removeLayer('$workspace', '$layername')");
   }
 
   $cmd0 = "curl --location-trusted -s -o /dev/null -w \"%{http_code}\" " . 
@@ -1671,16 +1755,16 @@ CREATE OR REPLACE FUNCTION admin.ov_publishGeoTIFF(text, text, text, text, text,
 
   spi_exec_query("SELECT admin.ov_reloadGeoserverNodes()");
 
-  $rv = spi_exec_query("SELECT admin.ov_isLayerExists('$processid', '$workspace', '$layername')");
+  $rv = spi_exec_query("SELECT admin.ov_isLayerExists('$workspace', '$layername')");
   $exists = $rv->{rows}[0]->{ov_islayerexists};
 
-  if ($exists eq 'true') {
+  if ($exists eq 't') {
     spi_exec_query("UPDATE admin.admin_table SET publishedonce = true WHERE resourceid = '$resourceid' AND type = '$type'");
     spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'publishGeoTIFF', '$stageStartTime', '".time."', 'INFO', 'Layer $layername published successfully')");
     return "$createWorkspaceLog. Layer $layername published successfully";
   }
   else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'publishGeoTIFF', '$stageStartTime', '".time."', 'ERROR', 'Failed to publish layer $layername')");
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', NULL, NULL, 'publishGeoTIFF', '$stageStartTime', '".time."', 'ERROR', 'Failed to publish layer $layername, with codes $res0, $res1, $res2')");
     return "$createWorkspaceLog. Failed to publish layer $layername, with codes $res0, $res1, $res2";
   }
 $$ LANGUAGE plperlu;
