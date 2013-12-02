@@ -4,7 +4,8 @@
 --SELECT admin.ov_psql('SELECT admin.ov_pushInQueue(''128'', ''RU_Hydrometcentre_50'', ''p0001_00'', ''pt'')');
 
 --SELECT admin.ov_initPlPerl();
---SELECT admin.ov_loginJOSSO();
+--SELECT admin.ov_loginJOSSO('');
+--SELECT admin.ov_logoutJOSSO();
 --SELECT admin.ov_reloadGeoserverNodes();
 --SELECT admin.ov_pushInQueue('128', 'RU_Hydrometcentre_50', 'p0001_00', 'pt');
 --SELECT admin.ov_popFromQueue('128', 'RU_Hydrometcentre_50', 'p0001_00', 'pt');
@@ -27,24 +28,27 @@
 --SELECT admin.ov_removeLayer('RU_Hydrometcentre_46_1', 'p0056_03', 'sf');
 --SELECT admin.ov_updateLayerTitleInSavedMaps('RU_Hydrometcentre_46', 'p0056_03', 'pt');
 
---SELECT admin.ov_addGeometryColumn('', 'RU_AARI_3151_1');
---SELECT admin.ov_addPrimaryKey('123', 'RU_Hydrometcentre_42_3');
+--SELECT admin.ov_addGeometryColumn('', 'RU_NFR_38_1');
+--SELECT admin.ov_addPrimaryKey('', 'RU_NFR_38_1');
 --SELECT admin.ov_createMask('RU_Hydrometcentre_46_1');
---SELECT admin.ov_createWorkspace('RU_Hydrometcentre_123_14');
+--SELECT admin.ov_createWorkspace('', 'RU_Hydrometcentre_61');
 --SELECT admin.ov_removeWorkspace('RU_Hydrometcentre_60');
 
 --Public API
-select admin.ov_processAllResources();
---SELECT admin.ov_processResource('', 'RU_AARI_3151_1', '', 'pt');
+--select admin.ov_processAllResources();
+select GisManager('RU_Hydrometcentre_42');
+--SELECT admin.ov_processResource('', 'RU_Hydrometcentre_42_19', '', 'pt');
 --SELECT admin.ov_processResource('processid', 'resourceid','param','type');
 
---SELECT admin.ov_publishResource('123', 'RU_Hydrometcentre_46', 'p0056_03', 'sf');
+--SELECT admin.ov_publishResource('', 'RU_Hydrometcentre_42_19', '', 'pt');
+--SELECT GetLayerName('RU_Hydrometcentre_61', '', 'pt');
 --SELECT admin.ov_publishPostgis('processid', 'resourceid', 'workspace', 'layername', 'title', 'description', 'keywords', 'defaultstyle', 'styles', 'schema', 'tablename');
 --SELECT admin.ov_publishGeoTIFF('processid', 'resourceid', 'workspace', 'layername', 'title', 'description', 'keywords', 'defaultstyle', 'styles', '/path_to_geotiff');
 --SELECT admin.ov_publishShapefile('processid', 'resourceid', 'workspace', 'layername', 'title', 'description', 'keywords', 'defaultstyle', 'styles', '/path_to_shapefile');
+--SELECT admin.ov_publishShapefile('', 'wv_9_max', 'userlayers', 'wv_9_max', 'title', 'description', 'keywords', 'ema_wv_az_sr', 'ema_wv_az_sr', '/opt/gis1/OceanViewer-web/data/resources/shp/EMA_THEME/AZOV_SEA/SUDOV/wv_9_max.shp');
 
---SELECT admin.ov_createResource('', 'RU_AARI_3151_1', '', 'pt');
---SELECT admin.ov_createPoints('processid', 'RU_Hydrometcentre_61');
+--SELECT admin.ov_createResource('', 'RU_Hydrometcentre_42_19', '', 'pt');
+--SELECT admin.ov_createPoints('', 'RU_AARI_3331_1');
 --SELECT admin.ov_createSurface('processid', 'RU_Hydrometcentre_60', 'p0239_00', '0.2');
 --SELECT admin.ov_createIsolines('processid', 'resourceid', 'param', 'cellsize', 'step', 'minlevel', 'maxlevel');
 --SELECT admin.ov_createTracks('processid', 'resourceid');
