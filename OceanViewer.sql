@@ -190,8 +190,8 @@ CREATE OR REPLACE FUNCTION admin.ov_loginJOSSO(text) RETURNS text AS $$
   $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/`;
   if ($response ne '200') {
     # Если нет, авторизуемся в JOSSO и получаем cookies для геосервера
-    `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/josso.txt -d "josso_cmd=login&josso_back_to=&josso_username=$_SHARED{'gsuser'}&josso_password=$_SHARED{'gspass'}" $_SHARED{'authurl'}/login.do`;
-    `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/geoserver.txt -b /tmp/josso.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/web/`;
+    $response1 = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/josso.txt -d "josso_cmd=login&josso_back_to=&josso_username=$_SHARED{'gsuser'}&josso_password=$_SHARED{'gspass'}" $_SHARED{'authurl'}/login.do`;
+    $response2 = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -c /tmp/geoserver.txt -b /tmp/josso.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/web/`;
 
     # Еще раз проверяем доступ к геосерверу
     $response = `curl --location-trusted -s -o /dev/null -w "%{http_code}" -b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' $_SHARED{'geoserver'}/rest/`;
@@ -216,6 +216,7 @@ COMMENT ON FUNCTION admin.ov_loginJOSSO(text) IS 'Авторизация в JOSS
 CREATE OR REPLACE FUNCTION admin.ov_logoutJOSSO() RETURNS text AS $$
 `rm /tmp/josso.txt`;
 `rm /tmp/geoserver.txt`;
+return `ls -l /tmp`;
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_logoutJOSSO() IS 'Деавторизация из JOSSO';
 
@@ -1035,7 +1036,7 @@ CREATE OR REPLACE FUNCTION admin.ov_createMask(text, text, text) RETURNS text AS
         spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'createMask', '$stageStartTime', '".time."', 'INFO', 'Mask $resource\_mask created successfully')");
         return "Mask $resource\_mask created successfully";
       }
-      # И если не создалась, пишел ошибку
+      # И если не создалась, пишем ошибку
       else {
         spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'createMask', '$stageStartTime', '".time."', 'ERROR', 'Failed to create mask $resource\_mask')");
         return "Failed to create mask $resource\_mask";
@@ -1187,8 +1188,7 @@ CREATE OR REPLACE FUNCTION admin.ov_logEvent(text, text, text, text, text, text,
   spi_exec_query("SELECT admin.ov_psql('INSERT INTO admin.process_log (processid, resourceid, param, type, stageid, datestart, datestop, loglevel, message) 
                   VALUES (''$processInstanceID'', ''$processObjectID'', $param, $type, ''$processStageID'', ''$dateStartReal'', ''$dateFinish'', ''$logLevel'', ''$messageText'')')");
 
-  #spi_exec_query("INSERT INTO admin.process_log (processid, resourceid, param, type, stageid, datestart, datestop, loglevel, message) 
-  #                VALUES ('$processInstanceID', '$processObjectID', $param, $type, '$processStageID', '$dateStartReal', '$dateFinish', '$logLevel', '$messageText')");
+  spi_exec_query("SELECT admin.ov_ssh('echo ''$componentID\n$nodeID\n$processID\n$processInstanceID\n$processObjectID\n$processSubjectID\n$processStageID\n$dateStartPlanned\n$dateStartPlanned\n$dateStartReal\n$dateFinish\n$dataVolume\n$logLevel\n$errorType\n$messageText\n'' | java -jar $_SHARED{'jarpath'}/logging-ws-bridge.jar')");
 
   return 'nothing to return';
 $$ LANGUAGE plperlu;
@@ -1286,7 +1286,8 @@ CREATE OR REPLACE FUNCTION admin.ov_processResource(text, text, text, text) RETU
     spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '".time."', '".time."', 'ERROR', 'Resourceid $resourceid is not present in admin_table')");
     return 1;
   }  
-  
+
+  # Получаем поле action  
   if ($type eq 'pt') {
     $rv = spi_exec_query("SELECT action FROM admin.admin_table WHERE resourceid ilike '$resourceid' AND type = '$type'");
     $action = $rv->{rows}[0]->{action};
@@ -1304,10 +1305,10 @@ CREATE OR REPLACE FUNCTION admin.ov_processResource(text, text, text, text) RETU
     return 1;
   }
 
+  # Выполняем команды из поля action
   if ($action =~ /builddata/) {
      $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_createResource(''$processid'', ''$resourceid'', ''$param'', ''$type'')')");
      $result1 = $rv->{rows}[0]->{ov_psql};
-    $result1 = ' ';
   }
   else {
      $result1 = 'No indication to build data';
@@ -1319,7 +1320,22 @@ CREATE OR REPLACE FUNCTION admin.ov_processResource(text, text, text, text) RETU
   else {
      $result2 = 'No indication to publish layer';
   }
-  
+  if ($action =~ /reseedcache/) {
+     $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_reseedCache(''$processid'', ''$resourceid'', ''$param'', ''$type'')')");
+     $result3 = $rv->{rows}[0]->{ov_psql};
+  }
+  else {
+     $result3 = 'No indication to publish layer';
+  }
+  if ($action =~ /truncatecache/) {
+     $rv = spi_exec_query("SELECT admin.ov_psql('SELECT admin.ov_truncateCache(''$processid'', ''$resourceid'', ''$param'', ''$type'')')");
+     $result4 = $rv->{rows}[0]->{ov_psql};
+  }
+  else {
+     $result4 = 'No indication to publish layer';
+  }
+
+  # Обработчик пустого результата, обычно происходит когда фия plpsql выходит через exception
   if ($result1 eq '') {
     $result1 = "Empty result, see previous messages";
     $err1 = '1';
@@ -1328,16 +1344,24 @@ CREATE OR REPLACE FUNCTION admin.ov_processResource(text, text, text, text) RETU
     $result2 = "Empty result, see previous messages";
     $err1 = '1';
   }
-
+  if ($result3 eq '') {
+    $result3 = "Empty result, see previous messages";
+    $err1 = '1';
+  }
+  if ($result4 eq '') {
+    $result4 = "Empty result, see previous messages";
+    $err1 = '1';
+  }
+  
   $rv = spi_exec_query("SELECT loglevel FROM admin.process_log WHERE processid = '$processid' AND loglevel = 'ERROR'");
   $err2 = $rv->{rows}[0]->{loglevel};
 
   if ($err1 ne '' or $err2 ne '') {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'ERROR', '$result1. $result2.')");
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'ERROR', '$result1. $result2. $result3. $result4.')");
     return 1;
   }
   else {
-    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'INFO', '$result1. $result2.')");
+    spi_exec_query("SELECT admin.ov_logEvent('$processid', '$resourceid', '$param', '$type', 'processResource', '$stageStartTime', '".time."', 'INFO', '$result1. $result2. $result3. $result4.')");
     return 0;
   }  
 $$ LANGUAGE plperlu;
@@ -1816,6 +1840,7 @@ CREATE OR REPLACE FUNCTION admin.ov_publishPostgis(text, text, text, text, text,
               "<enabled>true</enabled>" .
               "</layer>' " .
           "$_SHARED{'geoserver'}/rest/layers/$workspace\:$layername";
+
   $res1 = qx($cmd1);
   $res2 = qx($cmd2);
 
@@ -2063,6 +2088,54 @@ CREATE OR REPLACE FUNCTION admin.ov_publishShapefile(text, text, text, text, tex
   }
 $$ LANGUAGE plperlu;
 COMMENT ON FUNCTION admin.ov_publishShapefile(text, text, text, text, text, text, text, text, text, text) IS 'Публикация Shapefile';
+
+---------------------
+-- Обновление кэша --
+---------------------
+CREATE OR REPLACE FUNCTION admin.ov_reseedCache(text, text, text, text) RETURNS text AS $$
+  my $processid   = $_[0] ne '' ? $_[0] : time;
+  my $resourceid  = $_[1];
+  my $param       = $_[2];
+  my $type        = $_[3];
+
+  if ($_SHARED{'version'} eq '') {
+    spi_exec_query('SELECT admin.ov_initPLPerl()');
+  }
+  spi_exec_query("SELECT admin.ov_loginJOSSO('$processid')");
+
+$$ LANGUAGE plperlu;
+COMMENT ON FUNCTION admin.ov_reseedCache(text, text, text, text) IS 'Обновление кэша';
+
+-------------------
+-- Удаление кэша --
+-------------------
+CREATE OR REPLACE FUNCTION admin.ov_truncateCache(text, text, text, text) RETURNS text AS $$
+  my $processid   = $_[0] ne '' ? $_[0] : time;
+  my $resourceid  = $_[1];
+  my $param       = $_[2];
+  my $type        = $_[3];
+
+  if ($_SHARED{'version'} eq '') {
+    spi_exec_query('SELECT admin.ov_initPLPerl()');
+  }
+  spi_exec_query("SELECT admin.ov_loginJOSSO('$processid')");
+
+  $rv = spi_exec_query("SELECT admin.ov_getWorkspace('$processid', '$resourceid')");
+  $workspace = $rv->{rows}[0]->{ov_getworkspace};
+  $rv = spi_exec_query("SELECT admin.ov_getLayername('$resourceid', '$param', '$type')");
+  $layername = $rv->{rows}[0]->{ov_getlayername};
+
+  spi_exec_query("SELECT admin.ov_ssh('/bin/rm -rf $_SHARED{'ovhome'}/data/resources/gwc-cache/$workspace\_$layername')");
+#  $cmd0 = "curl --location-trusted  -w \"%{http_code}\" " . 
+#          "-b /tmp/geoserver.txt -u '$_SHARED{'gsuser'}:$_SHARED{'gspass'}' " .
+#          "-XPOST -H 'Content-type: application/xml' " .
+#          "-d '<truncateLayer><layerName>$workspace:$layername</layerName></truncateLayer>' " .
+#          "$_SHARED{'geoserver'}/gwc/rest/masstruncate";
+#  $res0 = qx($cmd0);
+
+  return "Remove cache $workspace\_$layername";
+$$ LANGUAGE plperlu;
+COMMENT ON FUNCTION admin.ov_truncateCache(text, text, text, text) IS 'Удаление кэша';
 
 -----------------------------------------------
 -- Удаление ресурса описанного в admin_table --
